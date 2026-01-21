@@ -2,6 +2,8 @@
 
 A one-shot setup script for **Ubuntu Server 24.04.x (Noble)** that installs:
 
+**This script was generated with ChatGPT and tested/reviewed by a Human.**
+
 - Docker Engine + Docker Compose plugin
 - Samba + an SMB share (interactive setup)
 - A standard media folder layout:
@@ -35,6 +37,8 @@ A one-shot setup script for **Ubuntu Server 24.04.x (Noble)** that installs:
 - A network where SMB makes sense (LAN / trusted subnet recommended)
 
 ---
+
+**This script was generated with ChatGPT and tested/reviewed by a Human.**
 
 ## Quick Start
 
@@ -142,6 +146,6 @@ If you hit an issue, open an issue and include:
 
 
 This script makes system-level changes (installs packages, edits `/etc/samba/smb.conf`, creates users/groups, starts services).  
-Read it before running it — you’re the admin here.
+Read it before running it, you’re the admin here.
 
 ---
