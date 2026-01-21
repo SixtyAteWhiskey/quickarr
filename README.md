@@ -8,7 +8,7 @@ A one-shot setup script for **Ubuntu Server 24.04.x (Noble)** that installs:
   - `media/Movies`
   - `media/Music`
   - `media/Shows`
-- Servarr apps (via the official Servarr community install script — interactive)
+- Radarr/Sonarr/Prowlarr (via docker)
 - Jellyfin (via Jellyfin’s official Deb/Ubuntu installer script)
 - Jellyseerr (via Docker Compose)
 
@@ -17,7 +17,7 @@ A one-shot setup script for **Ubuntu Server 24.04.x (Noble)** that installs:
 ### Installs
 - **Docker Engine** (official Docker apt repository)
 - **Samba** (SMB file sharing)
-- **Servarr** (Radarr/Sonarr/Prowlarr/Lidarr/etc.) via the Servarr install script (you choose which)
+- **Radarr/Sonarr/Prowlarr**
 - **Jellyfin** media server
 - **Jellyseerr** request management UI (Docker Compose)
 
@@ -105,15 +105,6 @@ Common commands:
     sudo docker compose ps
     sudo docker compose logs -f
     sudo docker compose restart
-
----
-
-## Servarr Notes (Important)
-
-The Servarr install step is **interactive**.
-
-- You’ll choose which Servarr app to install (Radarr/Sonarr/etc.)
-- Want multiple apps? Run the script again **or** rerun just the Servarr installer portion
 
 ---
 
