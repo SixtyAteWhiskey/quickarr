@@ -79,6 +79,10 @@ for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker c
   fi
 done
 
+# ---- quickarr hardening: remove duplicate Docker repo entries to avoid Signed-By conflicts ----
+rm -f /etc/apt/sources.list.d/*docker*.list
+rm -f /etc/apt/keyrings/docker.asc
+
 install -m 0755 -d /etc/apt/keyrings
 if [[ ! -f /etc/apt/keyrings/docker.gpg ]]; then
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
@@ -87,9 +91,6 @@ fi
 
 UBUNTU_CODENAME="$(. /etc/os-release && echo "${VERSION_CODENAME}")"
 ARCH="$(dpkg --print-architecture)"
-
-rm -f /etc/apt/sources.list.d/*docker*.list
-rm -f /etc/apt/keyrings/docker.asc
 
 cat >/etc/apt/sources.list.d/docker.list <<EOF
 deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME} stable
@@ -276,4 +277,4 @@ echo "  - Consider installing qbittorrent-nox and using a VPN provider for torre
 echo "  - You created a ${SHARE_PATH}/downloads folder so you can wire a download client into Radarr/Sonarr later."
 echo ""
 log "If something breaks, the Samba config backup is at: ${SMB_CONF}.bak.*"
-log "Enjoy your new media stack. Stop the killing, stop the dying. God bless!"
+log "Enjoy your new media stack. Try not to turn your storage into a museum of Linux ISOs. 🙂"
