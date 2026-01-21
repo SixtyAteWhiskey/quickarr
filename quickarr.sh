@@ -24,43 +24,34 @@ prompt_default() {
   fi
 }
 
-# Preflight: ensure APT isn't broken by conflicting Docker Signed-By entries
+# Preflight: ensure APT isn't broken by Docker Signed-By conflicts and stray backup files
 preflight_fix_docker_apt_conflict() {
   local ts; ts="$(date +%Y%m%d_%H%M%S)"
-  local changed="no"
+  local backup_dir="/root/quickarr-apt-backups/${ts}"
+  mkdir -p "$backup_dir"
 
-  # If APT is currently broken because Docker repo is configured multiple ways,
-  # we remove/disable ALL Docker repo entries BEFORE any apt-get update.
-  if grep -Rqs "download\.docker\.com/linux/ubuntu" /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null; then
-    warn "Preflight: existing Docker APT source(s) detected. Cleaning to avoid Signed-By conflicts..."
-
-    # Backup and comment out any docker lines in /etc/apt/sources.list
-    if grep -qs "download\.docker\.com/linux/ubuntu" /etc/apt/sources.list; then
-      cp -a /etc/apt/sources.list "/etc/apt/sources.list.bak.${ts}"
-      # Comment only lines containing download.docker.com
-      sed -i 's/^[[:space:]]*\(deb .*download\.docker\.com\/linux\/ubuntu.*\)$/# quickarr-disabled: \1/g' /etc/apt/sources.list
-      changed="yes"
-    fi
-
-    # Move aside any list files that reference Docker
-    for f in /etc/apt/sources.list.d/*.list; do
-      [[ -e "$f" ]] || continue
-      if grep -qs "download\.docker\.com/linux/ubuntu" "$f"; then
-        mv "$f" "${f}.bak.${ts}"
-        changed="yes"
-      fi
-    done
-
-    # Remove the conflicting .asc key if present (the usual culprit vs .gpg)
-    if [[ -f /etc/apt/keyrings/docker.asc ]]; then
-      rm -f /etc/apt/keyrings/docker.asc
-      changed="yes"
-    fi
+  # 1) Remove any Docker repo lines from /etc/apt/sources.list (if present)
+  if grep -qs "download\.docker\.com/linux/ubuntu" /etc/apt/sources.list 2>/dev/null; then
+    warn "Preflight: Docker repo found in /etc/apt/sources.list. Backing up + removing those lines..."
+    cp -a /etc/apt/sources.list "${backup_dir}/sources.list"
+    # Delete docker repo lines completely (safer than commenting, avoids Signed-By conflicts)
+    sed -i '/download\.docker\.com\/linux\/ubuntu/d' /etc/apt/sources.list
   fi
 
-  if [[ "$changed" == "yes" ]]; then
-    warn "Preflight done. Docker repo entries were disabled/backed up so apt can run."
-    warn "Later in the script, Docker repo will be re-added cleanly using /etc/apt/keyrings/docker.gpg."
+  # 2) Move aside ANY file in sources.list.d that references Docker, regardless of extension
+  shopt -s nullglob
+  for f in /etc/apt/sources.list.d/*; do
+    if grep -qs "download\.docker\.com/linux/ubuntu" "$f" 2>/dev/null; then
+      warn "Preflight: Moving docker repo file out of APT: $f"
+      mv "$f" "${backup_dir}/$(basename "$f")"
+    fi
+  done
+  shopt -u nullglob
+
+  # 3) Remove docker key variants to avoid Signed-By mismatch; we will recreate docker.gpg later
+  if [[ -f /etc/apt/keyrings/docker.asc || -f /etc/apt/keyrings/docker.gpg ]]; then
+    warn "Preflight: Removing existing Docker key files (docker.asc/docker.gpg) so we can recreate cleanly..."
+    rm -f /etc/apt/keyrings/docker.asc /etc/apt/keyrings/docker.gpg
   fi
 }
 
@@ -84,239 +75,23 @@ DEFAULT_SHARE_NAME="QuickARR"
 SHARE_PATH="$(prompt_default 'SMB share path (will be created if missing)' "$DEFAULT_SHARE_PATH")"
 SHARE_NAME="$(prompt_default 'SMB share name' "$DEFAULT_SHARE_NAME")"
 
-# Linux user that will own the files + be used by containers (PUID/PGID)
 DEFAULT_OWNER_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "ubuntu")}"
 OWNER_USER="$(prompt_default 'Linux user to own media/config files (must already exist)' "$DEFAULT_OWNER_USER")"
-
 if ! id "$OWNER_USER" >/dev/null 2>&1; then
   die "User '$OWNER_USER' does not exist. Create it first (e.g., sudo adduser $OWNER_USER), then re-run."
 fi
 
-# Samba user (can be same as OWNER_USER)
 SMB_USER="$(prompt_default 'Samba username to access the share (must be an existing Linux user)' "$OWNER_USER")"
 if ! id "$SMB_USER" >/dev/null 2>&1; then
   die "User '$SMB_USER' does not exist. Create it first, then re-run."
 fi
 
-# Optional LAN allow-list (blank = no restriction)
 ALLOWED_SUBNET="$(prompt_default 'Optional: restrict SMB access to subnet/CIDR (blank for no restriction)' "")"
 
-# Timezone for containers (best effort)
 TZ_VALUE="$(cat /etc/timezone 2>/dev/null || echo "Etc/UTC")"
 TZ_VALUE="$(prompt_default 'Timezone for containers (TZ database name)' "$TZ_VALUE")"
 
 PUID="$(id -u "$OWNER_USER")"
 PGID="$(id -g "$OWNER_USER")"
 
-# ---------- Install packages ----------
-log "Updating apt + installing prerequisites..."
-apt-get update -y
-apt-get install -y ca-certificates curl gnupg lsb-release apt-transport-https software-properties-common
-
-# ---------- Install Docker Engine (official repo method) ----------
-log "Installing Docker Engine + docker compose plugin..."
-# Remove conflicting packages if present (best-effort)
-for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
-  if dpkg -s "$pkg" >/dev/null 2>&1; then
-    warn "Removing conflicting package: $pkg"
-    apt-get remove -y "$pkg" || true
-  fi
-done
-
-# ---- quickarr hardening: remove any docker repo list files (we add ours cleanly) ----
-rm -f /etc/apt/sources.list.d/*docker*.list
-rm -f /etc/apt/keyrings/docker.asc
-
-install -m 0755 -d /etc/apt/keyrings
-# Always (re)create docker.gpg to be consistent
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-chmod a+r /etc/apt/keyrings/docker.gpg
-
-UBUNTU_CODENAME="$(. /etc/os-release && echo "${VERSION_CODENAME}")"
-ARCH="$(dpkg --print-architecture)"
-
-cat >/etc/apt/sources.list.d/docker.list <<EOF
-deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME} stable
-EOF
-
-apt-get update -y
-apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-systemctl enable --now docker
-
-# Add OWNER_USER to docker group (so they can run docker without sudo)
-if ! getent group docker >/dev/null; then
-  groupadd docker || true
-fi
-usermod -aG docker "$OWNER_USER" || true
-
-log "Docker installed. Note: '$OWNER_USER' may need to log out/in for docker group changes to apply."
-
-# ---------- Install Samba ----------
-log "Installing Samba..."
-apt-get install -y samba samba-common-bin
-systemctl enable --now smbd nmbd || systemctl enable --now smbd || true
-
-# ---------- Configure SMB share ----------
-log "Creating share folder structure..."
-mkdir -p "$SHARE_PATH"
-mkdir -p "$SHARE_PATH/media/Movies" "$SHARE_PATH/media/Music" "$SHARE_PATH/media/Shows"
-
-# Optional downloads folder (helps later if you add a download client)
-mkdir -p "$SHARE_PATH/downloads"
-
-# Permissions: group-writable, owned by OWNER_USER
-chown -R "$OWNER_USER":"$OWNER_USER" "$SHARE_PATH"
-chmod -R 2775 "$SHARE_PATH"
-
-log "Configuring Samba share in /etc/samba/smb.conf (with a backup)..."
-SMB_CONF="/etc/samba/smb.conf"
-cp -a "$SMB_CONF" "${SMB_CONF}.bak.$(date +%Y%m%d_%H%M%S)"
-
-# Avoid duplicate share stanzas
-if grep -q "^\[$SHARE_NAME\]" "$SMB_CONF"; then
-  warn "Share [$SHARE_NAME] already exists in smb.conf. Skipping stanza append."
-else
-  {
-    echo ""
-    echo "[$SHARE_NAME]"
-    echo "   path = $SHARE_PATH"
-    echo "   browseable = yes"
-    echo "   read only = no"
-    echo "   guest ok = no"
-    echo "   create mask = 0664"
-    echo "   directory mask = 2775"
-    echo "   force user = $OWNER_USER"
-    echo "   force group = $OWNER_USER"
-    echo "   vfs objects = fruit streams_xattr"
-    echo "   fruit:metadata = stream"
-    echo "   fruit:model = MacSamba"
-    echo "   fruit:posix_rename = yes"
-    echo "   fruit:veto_appledouble = no"
-    echo "   fruit:wipe_intentionally_left_blank_rfork = yes"
-    echo "   fruit:delete_empty_adfiles = yes"
-    if [[ -n "$ALLOWED_SUBNET" ]]; then
-      echo "   hosts allow = $ALLOWED_SUBNET"
-      echo "   hosts deny = 0.0.0.0/0"
-    fi
-  } >> "$SMB_CONF"
-fi
-
-log "Setting Samba password for user '$SMB_USER'..."
-smbpasswd -a "$SMB_USER"
-
-log "Restarting Samba..."
-systemctl restart smbd || true
-systemctl restart nmbd || true
-
-# ---------- Docker Compose stack ----------
-STACK_DIR="/opt/quickarr"
-CONFIG_DIR="${STACK_DIR}/config"
-mkdir -p "$CONFIG_DIR"/{radarr,sonarr,prowlarr,jellyfin,jellyseerr}
-
-# Make sure OWNER_USER owns config directories too
-chown -R "$OWNER_USER":"$OWNER_USER" "$STACK_DIR"
-chmod -R 2775 "$STACK_DIR"
-
-log "Writing docker compose stack to $STACK_DIR/compose.yaml ..."
-cat > "${STACK_DIR}/compose.yaml" <<EOF
-services:
-  prowlarr:
-    image: lscr.io/linuxserver/prowlarr:latest
-    container_name: prowlarr
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ_VALUE}
-    volumes:
-      - ${CONFIG_DIR}/prowlarr:/config
-    ports:
-      - "9696:9696"
-    restart: unless-stopped
-
-  radarr:
-    image: lscr.io/linuxserver/radarr:latest
-    container_name: radarr
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ_VALUE}
-    volumes:
-      - ${CONFIG_DIR}/radarr:/config
-      - ${SHARE_PATH}/media/Movies:/movies
-      - ${SHARE_PATH}/downloads:/downloads
-    ports:
-      - "7878:7878"
-    restart: unless-stopped
-    depends_on:
-      - prowlarr
-
-  sonarr:
-    image: lscr.io/linuxserver/sonarr:latest
-    container_name: sonarr
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ_VALUE}
-    volumes:
-      - ${CONFIG_DIR}/sonarr:/config
-      - ${SHARE_PATH}/media/Shows:/tv
-      - ${SHARE_PATH}/downloads:/downloads
-    ports:
-      - "8989:8989"
-    restart: unless-stopped
-    depends_on:
-      - prowlarr
-
-  jellyfin:
-    image: lscr.io/linuxserver/jellyfin:latest
-    container_name: jellyfin
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ_VALUE}
-    volumes:
-      - ${CONFIG_DIR}/jellyfin:/config
-      - ${SHARE_PATH}/media:/media
-    ports:
-      - "8096:8096"
-    restart: unless-stopped
-
-  jellyseerr:
-    image: fallenbagel/jellyseerr:latest
-    container_name: jellyseerr
-    environment:
-      - TZ=${TZ_VALUE}
-    volumes:
-      - ${CONFIG_DIR}/jellyseerr:/app/config
-    ports:
-      - "5055:5055"
-    restart: unless-stopped
-    depends_on:
-      - jellyfin
-EOF
-
-log "Starting containers..."
-cd "$STACK_DIR"
-docker compose up -d
-
-# ---------- Final info ----------
-IP_ADDR="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
-log "Done. Services should be reachable at:"
-echo "  - Prowlarr   : http://${IP_ADDR:-<server-ip>}:9696"
-echo "  - Radarr     : http://${IP_ADDR:-<server-ip>}:7878"
-echo "  - Sonarr     : http://${IP_ADDR:-<server-ip>}:8989"
-echo "  - Jellyfin   : http://${IP_ADDR:-<server-ip>}:8096"
-echo "  - Jellyseerr : http://${IP_ADDR:-<server-ip>}:5055"
-echo ""
-log "SMB Share:"
-echo "  - Share name : ${SHARE_NAME}"
-echo "  - Path       : ${SHARE_PATH}"
-echo "  - Example    : \\\\${IP_ADDR:-<server-ip>}\\${SHARE_NAME}"
-echo ""
-warn "Heads-up:"
-echo "  - Consider installing qbittorrent-nox and using a VPN provider for torrent traffic."
-echo "  - You created a ${SHARE_PATH}/downloads folder so you can wire a download client into Radarr/Sonarr later."
-echo ""
-log "If something breaks, the Samba config backup is at: ${SMB_CONF}.bak.*"
-log "Enjoy your new media stack. Try not to turn your storage into a museum of Linux ISOs. 🙂"
+# ---------- Install pa
