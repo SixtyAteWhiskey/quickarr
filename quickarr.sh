@@ -296,4 +296,4 @@ echo "  - Consider installing qbittorrent-nox and using a VPN provider for torre
 echo "  - You created a ${SHARE_PATH}/downloads folder so you can wire a download client into Radarr/Sonarr later."
 echo ""
 log "If something breaks, the Samba config backup is at: ${SMB_CONF}.bak.*"
-log "Enjoy your new media stack. Stop the killing, stop the dying God bless!."
+log "Enjoy your new media stack. Stop the killing, stop the dying. God bless!."
