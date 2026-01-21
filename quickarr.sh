@@ -63,7 +63,6 @@ echo " $NOTICE"
 echo "==============================================="
 
 log "This will install Docker + Samba, configure an SMB share, and deploy Radarr/Sonarr/Prowlarr/Jellyfin/Jellyseerr."
-log "If you're allergic to scripts touching your system, press Ctrl+C now. Otherwise... onward."
 
 # ---------- PRE-FLIGHT (MUST be before any apt-get update) ----------
 preflight_fix_docker_apt_conflict
@@ -297,4 +296,4 @@ echo "  - Consider installing qbittorrent-nox and using a VPN provider for torre
 echo "  - You created a ${SHARE_PATH}/downloads folder so you can wire a download client into Radarr/Sonarr later."
 echo ""
 log "If something breaks, the Samba config backup is at: ${SMB_CONF}.bak.*"
-log "Enjoy your new media stack. Try not to turn your storage into a museum of Linux ISOs. 🙂"
+log "Enjoy your new media stack. Stop the killing, stop the dying God bless!."
