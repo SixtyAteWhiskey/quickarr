@@ -32,7 +32,6 @@ echo " $NOTICE"
 echo "==============================================="
 
 log "This will install Docker + Samba, configure an SMB share, and deploy Radarr/Sonarr/Prowlarr/Jellyfin/Jellyseerr."
-log "If you're allergic to scripts touching your system, press Ctrl+C now. Otherwise... onward."
 
 # ---------- Collect inputs ----------
 DEFAULT_SHARE_PATH="/srv/samba/quickarr"
