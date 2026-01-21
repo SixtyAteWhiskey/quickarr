@@ -24,6 +24,46 @@ prompt_default() {
   fi
 }
 
+# Preflight: ensure APT isn't broken by conflicting Docker Signed-By entries
+preflight_fix_docker_apt_conflict() {
+  local ts; ts="$(date +%Y%m%d_%H%M%S)"
+  local changed="no"
+
+  # If APT is currently broken because Docker repo is configured multiple ways,
+  # we remove/disable ALL Docker repo entries BEFORE any apt-get update.
+  if grep -Rqs "download\.docker\.com/linux/ubuntu" /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null; then
+    warn "Preflight: existing Docker APT source(s) detected. Cleaning to avoid Signed-By conflicts..."
+
+    # Backup and comment out any docker lines in /etc/apt/sources.list
+    if grep -qs "download\.docker\.com/linux/ubuntu" /etc/apt/sources.list; then
+      cp -a /etc/apt/sources.list "/etc/apt/sources.list.bak.${ts}"
+      # Comment only lines containing download.docker.com
+      sed -i 's/^[[:space:]]*\(deb .*download\.docker\.com\/linux\/ubuntu.*\)$/# quickarr-disabled: \1/g' /etc/apt/sources.list
+      changed="yes"
+    fi
+
+    # Move aside any list files that reference Docker
+    for f in /etc/apt/sources.list.d/*.list; do
+      [[ -e "$f" ]] || continue
+      if grep -qs "download\.docker\.com/linux/ubuntu" "$f"; then
+        mv "$f" "${f}.bak.${ts}"
+        changed="yes"
+      fi
+    done
+
+    # Remove the conflicting .asc key if present (the usual culprit vs .gpg)
+    if [[ -f /etc/apt/keyrings/docker.asc ]]; then
+      rm -f /etc/apt/keyrings/docker.asc
+      changed="yes"
+    fi
+  fi
+
+  if [[ "$changed" == "yes" ]]; then
+    warn "Preflight done. Docker repo entries were disabled/backed up so apt can run."
+    warn "Later in the script, Docker repo will be re-added cleanly using /etc/apt/keyrings/docker.gpg."
+  fi
+}
+
 # ---------- Banner ----------
 require_root
 echo "==============================================="
@@ -32,6 +72,10 @@ echo " $NOTICE"
 echo "==============================================="
 
 log "This will install Docker + Samba, configure an SMB share, and deploy Radarr/Sonarr/Prowlarr/Jellyfin/Jellyseerr."
+log "If you're allergic to scripts touching your system, press Ctrl+C now. Otherwise... onward."
+
+# ---------- PRE-FLIGHT (MUST be before any apt-get update) ----------
+preflight_fix_docker_apt_conflict
 
 # ---------- Collect inputs ----------
 DEFAULT_SHARE_PATH="/srv/samba/quickarr"
@@ -79,15 +123,14 @@ for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker c
   fi
 done
 
-# ---- quickarr hardening: remove duplicate Docker repo entries to avoid Signed-By conflicts ----
+# ---- quickarr hardening: remove any docker repo list files (we add ours cleanly) ----
 rm -f /etc/apt/sources.list.d/*docker*.list
 rm -f /etc/apt/keyrings/docker.asc
 
 install -m 0755 -d /etc/apt/keyrings
-if [[ ! -f /etc/apt/keyrings/docker.gpg ]]; then
-  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-  chmod a+r /etc/apt/keyrings/docker.gpg
-fi
+# Always (re)create docker.gpg to be consistent
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+chmod a+r /etc/apt/keyrings/docker.gpg
 
 UBUNTU_CODENAME="$(. /etc/os-release && echo "${VERSION_CODENAME}")"
 ARCH="$(dpkg --print-architecture)"
@@ -160,7 +203,6 @@ else
 fi
 
 log "Setting Samba password for user '$SMB_USER'..."
-# Create samba user mapping; prompts for password
 smbpasswd -a "$SMB_USER"
 
 log "Restarting Samba..."
