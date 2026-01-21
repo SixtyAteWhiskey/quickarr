@@ -88,6 +88,9 @@ fi
 UBUNTU_CODENAME="$(. /etc/os-release && echo "${VERSION_CODENAME}")"
 ARCH="$(dpkg --print-architecture)"
 
+rm -f /etc/apt/sources.list.d/*docker*.list
+rm -f /etc/apt/keyrings/docker.asc
+
 cat >/etc/apt/sources.list.d/docker.list <<EOF
 deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME} stable
 EOF
