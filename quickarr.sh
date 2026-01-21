@@ -24,6 +24,54 @@ prompt_default() {
   fi
 }
 
+validate_share_path() {
+  local input="$1"
+  [[ -n "$input" ]] || die "SMB share path cannot be empty."
+
+  # Normalize path (tolerates non-existent segments)
+  local p
+  p="$(realpath -m -- "$input")" || die "Invalid SMB share path: $input"
+
+  # Must be absolute
+  [[ "$p" == /* ]] || die "SMB share path must be an absolute path (starts with /). Got: $p"
+
+  # Absolutely never allow root
+  [[ "$p" != "/" ]] || die "SMB share path cannot be '/'. Use something like /srv/samba/quickarr or /mnt/media/quickarr."
+
+  # Block pseudo/system mountpoints and OS dirs
+  case "$p" in
+    /proc|/proc/*|/sys|/sys/*|/dev|/dev/*|/run|/run/*|/boot|/boot/*)
+      die "SMB share path cannot be inside system/pseudo filesystems (proc/sys/dev/run/boot). Got: $p"
+      ;;
+    /etc|/etc/*|/bin|/bin/*|/sbin|/sbin/*|/lib|/lib/*|/lib64|/lib64/*|/usr|/usr/*)
+      die "SMB share path cannot be inside OS directories (/etc,/usr,/bin,/lib,...). Got: $p"
+      ;;
+  esac
+
+  # Optional: enforce “safe roots” only (uncomment if you want to be strict)
+  # case "$p" in
+  #   /srv/*|/mnt/*|/media/*|/opt/*) ;;
+  #   *) die "SMB share path must live under /srv, /mnt, /media, or /opt. Got: $p" ;;
+  # esac
+
+  echo "$p"
+}
+
+validate_share_name() {
+  local name="$1"
+  [[ -n "$name" ]] || die "SMB share name cannot be empty."
+  [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || die "SMB share name must be alnum plus . _ - (no spaces). Got: '$name'"
+}
+
+safe_chown_tree() {
+  local owner_user="$1"; local owner_group="$2"; shift 2
+  local targets=("$@")
+  for t in "${targets[@]}"; do
+    [[ -d "$t" ]] || continue
+    chown -R "${owner_user}:${owner_group}" "$t"
+  done
+}
+
 # Preflight: ensure APT isn't broken by Docker Signed-By conflicts and stray backup files
 preflight_fix_docker_apt_conflict() {
   local ts; ts="$(date +%Y%m%d_%H%M%S)"
@@ -72,7 +120,10 @@ DEFAULT_SHARE_PATH="/srv/samba/quickarr"
 DEFAULT_SHARE_NAME="QuickARR"
 
 SHARE_PATH="$(prompt_default 'SMB share path (will be created if missing)' "$DEFAULT_SHARE_PATH")"
+SHARE_PATH="$(validate_share_path "$SHARE_PATH")"
+
 SHARE_NAME="$(prompt_default 'SMB share name' "$DEFAULT_SHARE_NAME")"
+validate_share_name "$SHARE_NAME"
 
 DEFAULT_OWNER_USER="${SUDO_USER:-$(logname 2>/dev/null || echo "ubuntu")}"
 OWNER_USER="$(prompt_default 'Linux user to own media/config files (must already exist)' "$DEFAULT_OWNER_USER")"
@@ -142,11 +193,19 @@ systemctl enable --now smbd nmbd || systemctl enable --now smbd || true
 
 # ---------- Configure SMB share ----------
 log "Creating share folder structure..."
-mkdir -p "$SHARE_PATH/media/Movies" "$SHARE_PATH/media/Music" "$SHARE_PATH/media/Shows"
-mkdir -p "$SHARE_PATH/downloads"
+mkdir -p \
+  "$SHARE_PATH/media/Movies" \
+  "$SHARE_PATH/media/Music" \
+  "$SHARE_PATH/media/Shows" \
+  "$SHARE_PATH/downloads"
 
-chown -R "$OWNER_USER":"$OWNER_USER" "$SHARE_PATH"
-chmod -R 2775 "$SHARE_PATH"
+# IMPORTANT: never chown the base path itself (prevents SHARE_PATH=/ disaster)
+safe_chown_tree "$OWNER_USER" "$OWNER_USER" \
+  "$SHARE_PATH/media" \
+  "$SHARE_PATH/downloads"
+
+# Permissions: setgid so new files inherit group
+chmod -R 2775 "$SHARE_PATH/media" "$SHARE_PATH/downloads"
 
 log "Configuring Samba share in /etc/samba/smb.conf (with a backup)..."
 SMB_CONF="/etc/samba/smb.conf"
