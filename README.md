@@ -1,6 +1,6 @@
 # quickarr
 
-A one-shot setup script for **Ubuntu Server 24.04.x (Noble)** that installs:
+A script for **Ubuntu Server 24.04.x (Noble)** that installs:
 
 **This script was generated with ChatGPT and tested/reviewed by a Human.**
 
